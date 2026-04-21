@@ -63,8 +63,9 @@ func TestParseNoteUsesFileMtimeWhenFrontMatterMissing(t *testing.T) {
 	})
 	assert.NilError(t, err)
 
-	note, err := exporter.parseNote(notePath, "Note.md")
+	note, shouldSkip, err := exporter.parseNote(notePath, "Note.md")
 	assert.NilError(t, err)
+	assert.Assert(t, !shouldSkip)
 	assert.Equal(t, note.Date, modifiedTime)
 	assert.Assert(t, note.LastModified == nil)
 	assert.Equal(t, note.Title, "Note")
@@ -101,8 +102,9 @@ Body
 	})
 	assert.NilError(t, err)
 
-	note, err := exporter.parseNote(notePath, "Front Matter.md")
+	note, shouldSkip, err := exporter.parseNote(notePath, "Front Matter.md")
 	assert.NilError(t, err)
+	assert.Assert(t, !shouldSkip)
 	assert.Equal(t, note.Date, time.Date(2026, 4, 20, 7, 0, 0, 0, time.UTC))
 	assert.Assert(t, note.LastModified != nil)
 	assert.Equal(t, *note.LastModified, time.Date(2026, 4, 21, 8, 30, 0, 0, time.UTC))
@@ -139,8 +141,9 @@ Body
 	})
 	assert.NilError(t, err)
 
-	note, err := exporter.parseNote(notePath, "Aliases.md")
+	note, shouldSkip, err := exporter.parseNote(notePath, "Aliases.md")
 	assert.NilError(t, err)
+	assert.Assert(t, !shouldSkip)
 	assert.Equal(t, note.Date, time.Date(2026, 4, 20, 7, 0, 0, 0, time.UTC))
 	assert.Assert(t, note.LastModified != nil)
 	assert.Equal(t, *note.LastModified, time.Date(2026, 4, 21, 8, 30, 0, 0, time.UTC))
@@ -156,6 +159,8 @@ date created: nope
 ---
 # Broken
 
+Body
+
 #blog/3`
 
 	assert.NilError(t, os.WriteFile(notePath, []byte(noteBody), defaultFileMode))
@@ -170,8 +175,66 @@ date created: nope
 	})
 	assert.NilError(t, err)
 
-	_, err = exporter.parseNote(notePath, "Broken.md")
+	_, shouldSkip, err := exporter.parseNote(notePath, "Broken.md")
+	assert.Assert(t, !shouldSkip)
 	assert.ErrorContains(t, err, "parse created timestamp")
+}
+
+func TestParseNoteSkipsShortMarkdown(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		body     string
+		fileName string
+	}{
+		{
+			name:     "empty file",
+			body:     "",
+			fileName: "Empty.md",
+		},
+		{
+			name:     "two non-empty lines",
+			body:     "# Short\n\n#blog/3",
+			fileName: "Short.md",
+		},
+		{
+			name: "front matter does not count",
+			body: `---
+created: 2026-04-20T10:00:00+03:00
+---
+# Front Matter
+
+#blog/3`,
+			fileName: "FrontMatterOnly.md",
+		},
+	}
+
+	for _, testCase := range tests {
+		testCase := testCase
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			tempDir := t.TempDir()
+			notePath := filepath.Join(tempDir, testCase.fileName)
+			assert.NilError(t, os.WriteFile(notePath, []byte(testCase.body), defaultFileMode))
+
+			exporter, err := New(Config{
+				ContentDir: "content/blog",
+				HugoDir:    tempDir,
+				Tag:        "#blog/3",
+				TagLine:    -1,
+				TimeFormat: time.RFC3339,
+				VaultDir:   tempDir,
+			})
+			assert.NilError(t, err)
+
+			note, shouldSkip, err := exporter.parseNote(notePath, testCase.fileName)
+			assert.NilError(t, err)
+			assert.Assert(t, shouldSkip)
+			assert.Assert(t, note == nil)
+		})
+	}
 }
 
 func TestRewriteWikiTargetDowngradesUnsupportedAnchors(t *testing.T) {
@@ -249,6 +312,40 @@ func TestRunDetectsAttachmentCollision(t *testing.T) {
 		VaultDir:   vaultDir,
 	})
 	assert.ErrorContains(t, err, "attachment collision")
+}
+
+func TestRunSkipsShortMarkdownFiles(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	vaultDir := filepath.Join(tempDir, "vault")
+	siteDir := filepath.Join(tempDir, "site")
+
+	assert.NilError(t, os.MkdirAll(vaultDir, defaultDirMode))
+	assert.NilError(t, os.MkdirAll(siteDir, defaultDirMode))
+
+	validBody := "# Valid\n\nBody\n\n#blog/3"
+	shortBody := "# Short\n\n#blog/3"
+	assert.NilError(t, os.WriteFile(filepath.Join(vaultDir, "valid.md"), []byte(validBody), defaultFileMode))
+	assert.NilError(t, os.WriteFile(filepath.Join(vaultDir, "short.md"), []byte(shortBody), defaultFileMode))
+	assert.NilError(t, os.WriteFile(filepath.Join(vaultDir, "empty.md"), []byte(""), defaultFileMode))
+
+	err := Run(context.Background(), Config{
+		ContentDir: "content/blog",
+		HugoDir:    siteDir,
+		Tag:        "#blog/3",
+		TagLine:    -1,
+		TimeFormat: time.RFC3339,
+		VaultDir:   vaultDir,
+	})
+	assert.NilError(t, err)
+
+	_, err = os.Stat(filepath.Join(siteDir, "content/blog", "valid", "index.md"))
+	assert.NilError(t, err)
+	_, err = os.Stat(filepath.Join(siteDir, "content/blog", "short"))
+	assert.Assert(t, os.IsNotExist(err))
+	_, err = os.Stat(filepath.Join(siteDir, "content/blog", "empty"))
+	assert.Assert(t, os.IsNotExist(err))
 }
 
 func copyDir(srcDir, dstDir string) error {
