@@ -60,11 +60,11 @@ type Config struct {
 
 type Exporter struct {
 	cfg              Config
-	attachmentByBase map[string]*Attachment
+	attachmentByBase map[string][]*Attachment
 	attachmentByRel  map[string]*Attachment
 	noteByRelNoExt   map[string]*Note
-	noteByStem       map[string]*Note
-	noteByTitle      map[string]*Note
+	noteByStem       map[string][]*Note
+	noteByTitle      map[string][]*Note
 	notes            []*Note
 }
 
@@ -125,12 +125,12 @@ func New(cfg Config) (*Exporter, error) {
 	cfg.HugoDir = hugoDir
 
 	return &Exporter{
-		attachmentByBase: map[string]*Attachment{},
+		attachmentByBase: map[string][]*Attachment{},
 		attachmentByRel:  map[string]*Attachment{},
 		cfg:              cfg,
 		noteByRelNoExt:   map[string]*Note{},
-		noteByStem:       map[string]*Note{},
-		noteByTitle:      map[string]*Note{},
+		noteByStem:       map[string][]*Note{},
+		noteByTitle:      map[string][]*Note{},
 		notes:            []*Note{},
 	}, nil
 }
@@ -441,7 +441,11 @@ func (e *Exporter) rewriteMarkdownTarget(
 		return "", err
 	}
 
-	if noteTarget, ok := e.resolveMarkdownNoteTarget(note, cleanTarget); ok {
+	noteTarget, ok, err := e.resolveMarkdownNoteTarget(note, cleanTarget)
+	if err != nil {
+		return "", err
+	}
+	if ok {
 		if noteTarget.Export {
 			return markdownReplacement(false, displayLabel(label, noteTarget.Title), relativeNoteLink(note.Slug, noteTarget.Slug)), nil
 		}
@@ -449,7 +453,10 @@ func (e *Exporter) rewriteMarkdownTarget(
 		return displayLabel(label, noteTarget.Title), nil
 	}
 
-	attachmentTarget, ok := e.resolveMarkdownAttachmentTarget(note, cleanTarget)
+	attachmentTarget, ok, err := e.resolveMarkdownAttachmentTarget(note, cleanTarget)
+	if err != nil {
+		return "", err
+	}
 	if !ok {
 		return markdownReplacement(isEmbed, label, target), nil
 	}
@@ -459,7 +466,7 @@ func (e *Exporter) rewriteMarkdownTarget(
 		return "", err
 	}
 
-	return markdownReplacement(isEmbed || isImagePath(cleanTarget), displayLabel(label, attachmentTarget.BaseName), rewrittenTarget), nil
+	return markdownReplacement(isEmbed || isImagePath(cleanTarget), displayLabel(label, attachmentTarget.BaseName), escapeMarkdownPath(rewrittenTarget)), nil
 }
 
 func (e *Exporter) rewriteWikiTarget(
@@ -477,18 +484,44 @@ func (e *Exporter) rewriteWikiTarget(
 		return displayLabel(label, baseNameWithoutExt(target)), nil
 	}
 
-	if attachmentTarget, ok := e.resolveWikiAttachmentTarget(target); ok && (isEmbed || !looksLikeNotePath(target)) {
+	if isEmbed || !looksLikeNotePath(target) {
+		attachmentTarget, ok, err := e.resolveWikiAttachmentTarget(note, target)
+		if err != nil {
+			return "", err
+		}
+		if ok {
+			rewrittenTarget, err := registerAttachmentCopy(copies, attachmentTarget)
+			if err != nil {
+				return "", err
+			}
+
+			return markdownReplacement(isEmbed || isImagePath(target), displayLabel(label, attachmentTarget.BaseName), escapeMarkdownPath(rewrittenTarget)), nil
+		}
+	}
+
+	noteTarget, ok, err := e.resolveWikiNoteTarget(note, target)
+	if err != nil {
+		return "", err
+	}
+	if !ok {
+		if isEmbed || !looksLikeNotePath(target) {
+			return displayLabel(label, baseNameWithoutExt(target)), nil
+		}
+
+		attachmentTarget, attachmentFound, err := e.resolveWikiAttachmentTarget(note, target)
+		if err != nil {
+			return "", err
+		}
+		if !attachmentFound {
+			return displayLabel(label, baseNameWithoutExt(target)), nil
+		}
+
 		rewrittenTarget, err := registerAttachmentCopy(copies, attachmentTarget)
 		if err != nil {
 			return "", err
 		}
 
-		return markdownReplacement(isEmbed || isImagePath(target), displayLabel(label, attachmentTarget.BaseName), rewrittenTarget), nil
-	}
-
-	noteTarget, ok := e.resolveWikiNoteTarget(target)
-	if !ok {
-		return displayLabel(label, baseNameWithoutExt(target)), nil
+		return markdownReplacement(isImagePath(target), displayLabel(label, attachmentTarget.BaseName), escapeMarkdownPath(rewrittenTarget)), nil
 	}
 
 	if !noteTarget.Export {
@@ -498,14 +531,14 @@ func (e *Exporter) rewriteWikiTarget(
 	return markdownReplacement(false, displayLabel(label, noteTarget.Title), relativeNoteLink(note.Slug, noteTarget.Slug)), nil
 }
 
-func (e *Exporter) resolveMarkdownNoteTarget(note *Note, target string) (*Note, bool) {
+func (e *Exporter) resolveMarkdownNoteTarget(note *Note, target string) (*Note, bool, error) {
 	cleanTarget := strings.TrimSpace(target)
 	if hasUnsupportedAnchor(cleanTarget) {
-		return nil, false
+		return nil, false, nil
 	}
 
 	if !looksLikeNotePath(cleanTarget) {
-		return nil, false
+		return nil, false, nil
 	}
 
 	baseDir := pathDir(note.RelativePath)
@@ -513,66 +546,87 @@ func (e *Exporter) resolveMarkdownNoteTarget(note *Note, target string) (*Note, 
 	vaultRelative = strings.TrimPrefix(vaultRelative, "./")
 	noteTarget, ok := e.noteByRelNoExt[strings.TrimSuffix(strings.ToLower(vaultRelative), markdownExt)]
 	if ok {
-		return noteTarget, true
+		return noteTarget, true, nil
 	}
 
-	return nil, false
+	noteTarget, ok, err := e.resolveVaultWideNoteTarget(cleanTarget)
+	if err != nil {
+		return nil, false, err
+	}
+
+	return noteTarget, ok, nil
 }
 
-func (e *Exporter) resolveMarkdownAttachmentTarget(note *Note, target string) (*Attachment, bool) {
+func (e *Exporter) resolveMarkdownAttachmentTarget(note *Note, target string) (*Attachment, bool, error) {
 	if target == "" || strings.HasPrefix(target, "#") {
-		return nil, false
+		return nil, false, nil
 	}
 
 	baseDir := pathDir(note.RelativePath)
 	vaultRelative := filepath.ToSlash(filepath.Clean(filepath.Join(baseDir, target)))
 	vaultRelative = strings.TrimPrefix(vaultRelative, "./")
 	attachment, ok := e.attachmentByRel[strings.ToLower(vaultRelative)]
-	return attachment, ok
-}
-
-func (e *Exporter) resolveWikiAttachmentTarget(target string) (*Attachment, bool) {
-	cleanTarget := filepath.ToSlash(filepath.Clean(strings.TrimSpace(target)))
-	cleanTarget = strings.TrimPrefix(cleanTarget, "./")
-
-	if strings.Contains(cleanTarget, "/") {
-		attachment, ok := e.attachmentByRel[strings.ToLower(cleanTarget)]
-		return attachment, ok
+	if ok {
+		return attachment, true, nil
 	}
 
-	attachment, ok := e.attachmentByBase[strings.ToLower(cleanTarget)]
-	return attachment, ok
+	attachment, ok, err := e.resolveVaultWideAttachmentTarget(target)
+	if err != nil {
+		return nil, false, err
+	}
+
+	return attachment, ok, nil
 }
 
-func (e *Exporter) resolveWikiNoteTarget(target string) (*Note, bool) {
+func (e *Exporter) resolveWikiAttachmentTarget(note *Note, target string) (*Attachment, bool, error) {
 	cleanTarget := filepath.ToSlash(filepath.Clean(strings.TrimSpace(target)))
 	cleanTarget = strings.TrimPrefix(cleanTarget, "./")
-	cleanTarget = strings.TrimSuffix(cleanTarget, markdownExt)
-	loweredTarget := strings.ToLower(cleanTarget)
 
-	if strings.Contains(cleanTarget, "/") {
-		note, ok := e.noteByRelNoExt[loweredTarget]
+	if note != nil {
+		baseDir := pathDir(note.RelativePath)
+		vaultRelative := filepath.ToSlash(filepath.Clean(filepath.Join(baseDir, cleanTarget)))
+		vaultRelative = strings.TrimPrefix(vaultRelative, "./")
+		attachment, ok := e.attachmentByRel[strings.ToLower(vaultRelative)]
 		if ok {
-			return note, true
+			return attachment, true, nil
 		}
 	}
 
-	stem := strings.ToLower(filepath.Base(cleanTarget))
-	if note, ok := e.noteByStem[stem]; ok && note != nil {
-		return note, true
+	attachment, ok, err := e.resolveVaultWideAttachmentTarget(cleanTarget)
+	if err != nil {
+		return nil, false, err
 	}
 
-	note, ok := e.noteByTitle[strings.ToLower(filepath.Base(cleanTarget))]
-	return note, ok
+	return attachment, ok, nil
+}
+
+func (e *Exporter) resolveWikiNoteTarget(note *Note, target string) (*Note, bool, error) {
+	cleanTarget := filepath.ToSlash(filepath.Clean(strings.TrimSpace(target)))
+	cleanTarget = strings.TrimPrefix(cleanTarget, "./")
+	cleanTarget = strings.TrimSuffix(cleanTarget, markdownExt)
+	if note != nil {
+		baseDir := pathDir(note.RelativePath)
+		vaultRelative := filepath.ToSlash(filepath.Clean(filepath.Join(baseDir, cleanTarget)))
+		vaultRelative = strings.TrimPrefix(vaultRelative, "./")
+		noteTarget, ok := e.noteByRelNoExt[strings.ToLower(vaultRelative)]
+		if ok {
+			return noteTarget, true, nil
+		}
+	}
+
+	noteTarget, ok, err := e.resolveVaultWideNoteTarget(cleanTarget)
+	if err != nil {
+		return nil, false, err
+	}
+
+	return noteTarget, ok, nil
 }
 
 func (e *Exporter) indexAttachment(attachment *Attachment) {
 	relativeKey := strings.ToLower(attachment.RelativePath)
 	baseKey := strings.ToLower(attachment.BaseName)
 	e.attachmentByRel[relativeKey] = attachment
-	if _, exists := e.attachmentByBase[baseKey]; !exists {
-		e.attachmentByBase[baseKey] = attachment
-	}
+	e.attachmentByBase[baseKey] = append(e.attachmentByBase[baseKey], attachment)
 }
 
 func (e *Exporter) indexNote(note *Note) {
@@ -580,16 +634,51 @@ func (e *Exporter) indexNote(note *Note) {
 	e.noteByRelNoExt[relNoExt] = note
 
 	stemKey := strings.ToLower(filepath.Base(relNoExt))
-	if existing, exists := e.noteByStem[stemKey]; exists && existing != nil && existing.RelativePath != note.RelativePath {
-		e.noteByStem[stemKey] = nil
-	} else if !exists {
-		e.noteByStem[stemKey] = note
-	}
+	e.noteByStem[stemKey] = append(e.noteByStem[stemKey], note)
 
 	titleKey := strings.ToLower(note.Title)
-	if _, exists := e.noteByTitle[titleKey]; !exists {
-		e.noteByTitle[titleKey] = note
+	e.noteByTitle[titleKey] = append(e.noteByTitle[titleKey], note)
+}
+
+func (e *Exporter) resolveVaultWideAttachmentTarget(target string) (*Attachment, bool, error) {
+	baseKey := strings.ToLower(filepath.Base(target))
+	attachments := e.attachmentByBase[baseKey]
+	switch len(attachments) {
+	case 0:
+		return nil, false, nil
+	case 1:
+		return attachments[0], true, nil
+	default:
+		return nil, false, ambiguousAttachmentTargetError(target, attachments)
 	}
+}
+
+func (e *Exporter) resolveVaultWideNoteTarget(target string) (*Note, bool, error) {
+	cleanTarget := filepath.ToSlash(filepath.Clean(strings.TrimSpace(target)))
+	cleanTarget = strings.TrimPrefix(cleanTarget, "./")
+	cleanTarget = strings.TrimSuffix(cleanTarget, markdownExt)
+
+	stemKey := strings.ToLower(filepath.Base(cleanTarget))
+	stemNotes := e.noteByStem[stemKey]
+	if len(stemNotes) == 1 {
+		return stemNotes[0], true, nil
+	}
+
+	titleKey := strings.ToLower(filepath.Base(cleanTarget))
+	titleNotes := e.noteByTitle[titleKey]
+	if len(titleNotes) == 1 {
+		return titleNotes[0], true, nil
+	}
+
+	if len(stemNotes) > 1 {
+		return nil, false, ambiguousNoteTargetError(target, stemNotes)
+	}
+
+	if len(titleNotes) > 1 {
+		return nil, false, ambiguousNoteTargetError(target, titleNotes)
+	}
+
+	return nil, false, nil
 }
 
 func renderFrontMatter(note *Note, body string, cfg Config) string {
@@ -921,6 +1010,15 @@ func markdownReplacement(isEmbed bool, label, target string) string {
 	return fmt.Sprintf("%s[%s](%s)", prefix, label, target)
 }
 
+func escapeMarkdownPath(path string) string {
+	segments := strings.Split(path, "/")
+	for index, segment := range segments {
+		segments[index] = url.PathEscape(segment)
+	}
+
+	return strings.Join(segments, "/")
+}
+
 func displayLabel(explicitLabel, fallback string) string {
 	if explicitLabel != "" {
 		return explicitLabel
@@ -942,6 +1040,26 @@ func registerAttachmentCopy(copies map[string]attachmentCopy, attachment *Attach
 
 	copies[destinationName] = attachmentCopy{Source: attachment}
 	return destinationName, nil
+}
+
+func ambiguousAttachmentTargetError(target string, attachments []*Attachment) error {
+	paths := make([]string, 0, len(attachments))
+	for _, attachment := range attachments {
+		paths = append(paths, attachment.RelativePath)
+	}
+
+	slices.Sort(paths)
+	return fmt.Errorf("ambiguous attachment target %q matches %s", target, strings.Join(paths, ", "))
+}
+
+func ambiguousNoteTargetError(target string, notes []*Note) error {
+	paths := make([]string, 0, len(notes))
+	for _, note := range notes {
+		paths = append(paths, note.RelativePath)
+	}
+
+	slices.Sort(paths)
+	return fmt.Errorf("ambiguous note target %q matches %s", target, strings.Join(paths, ", "))
 }
 
 func isExternalTarget(target string) bool {

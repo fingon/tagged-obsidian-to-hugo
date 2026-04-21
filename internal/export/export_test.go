@@ -12,6 +12,11 @@ import (
 	"gotest.tools/v3/golden"
 )
 
+const (
+	testContentDir = "content/blog"
+	testTag        = "#blog/3"
+)
+
 func TestScanTags(t *testing.T) {
 	t.Parallel()
 
@@ -492,9 +497,9 @@ func TestRewriteWikiTargetDowngradesUnsupportedAnchors(t *testing.T) {
 	t.Parallel()
 
 	exporter, err := New(Config{
-		ContentDir: "content/blog",
+		ContentDir: testContentDir,
 		HugoDir:    t.TempDir(),
-		Tag:        "#blog/3",
+		Tag:        testTag,
 		TimeFormat: time.RFC3339,
 		VaultDir:   t.TempDir(),
 	})
@@ -503,6 +508,116 @@ func TestRewriteWikiTargetDowngradesUnsupportedAnchors(t *testing.T) {
 	got, err := exporter.rewriteWikiTarget(&Note{Slug: "source"}, false, "other-note#heading", "", map[string]attachmentCopy{})
 	assert.NilError(t, err)
 	assert.Equal(t, got, "other-note")
+}
+
+func TestRunFallsBackToVaultWideTargets(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	vaultDir := filepath.Join(tempDir, "vault")
+	siteDir := filepath.Join(tempDir, "site")
+
+	assert.NilError(t, os.MkdirAll(filepath.Join(vaultDir, "posts"), defaultDirMode))
+	assert.NilError(t, os.MkdirAll(filepath.Join(vaultDir, "nested"), defaultDirMode))
+	assert.NilError(t, os.MkdirAll(filepath.Join(vaultDir, "assets"), defaultDirMode))
+	assert.NilError(t, os.MkdirAll(filepath.Join(vaultDir, "misc"), defaultDirMode))
+	assert.NilError(t, os.MkdirAll(siteDir, defaultDirMode))
+
+	sourceBody := "# Source\n\n[Second from markdown](Second.md)\n\n[Spec](spec.txt)\n\n![[photo.png]]\n\n[[Plain Note]]\n\n#blog/3 #y/2026/4/21"
+	secondBody := "# Second\n\nBody\n\n#blog/3 #y/2026/4/21"
+	plainBody := "# Plain Note\n\nBody\n\n#other"
+	assert.NilError(t, os.WriteFile(filepath.Join(vaultDir, "posts", "Source.md"), []byte(sourceBody), defaultFileMode))
+	assert.NilError(t, os.WriteFile(filepath.Join(vaultDir, "nested", "Second.md"), []byte(secondBody), defaultFileMode))
+	assert.NilError(t, os.WriteFile(filepath.Join(vaultDir, "misc", "Plain Note.md"), []byte(plainBody), defaultFileMode))
+	assert.NilError(t, os.WriteFile(filepath.Join(vaultDir, "assets", "spec.txt"), []byte("spec fixture"), defaultFileMode))
+	assert.NilError(t, os.WriteFile(filepath.Join(vaultDir, "assets", "photo.png"), []byte("png fixture"), defaultFileMode))
+
+	err := Run(context.Background(), Config{
+		ContentDir: testContentDir,
+		HugoDir:    siteDir,
+		Tag:        testTag,
+		TagLine:    -1,
+		TimeFormat: time.RFC3339,
+		VaultDir:   vaultDir,
+	})
+	assert.NilError(t, err)
+
+	indexData, err := os.ReadFile(filepath.Join(siteDir, testContentDir, "source", indexFileName))
+	assert.NilError(t, err)
+	indexBody := string(indexData)
+	assert.Assert(t, strings.Contains(indexBody, "[Second from markdown](../second/)"))
+	assert.Assert(t, strings.Contains(indexBody, "[Spec](spec.txt)"))
+	assert.Assert(t, strings.Contains(indexBody, "![photo.png](photo.png)"))
+	assert.Assert(t, strings.Contains(indexBody, "\nPlain Note\n"))
+
+	specData, err := os.ReadFile(filepath.Join(siteDir, testContentDir, "source", "spec.txt"))
+	assert.NilError(t, err)
+	assert.Equal(t, string(specData), "spec fixture")
+
+	photoData, err := os.ReadFile(filepath.Join(siteDir, testContentDir, "source", "photo.png"))
+	assert.NilError(t, err)
+	assert.Equal(t, string(photoData), "png fixture")
+}
+
+func TestRunEscapesCopiedAttachmentPathsForMarkdown(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	vaultDir := filepath.Join(tempDir, "vault")
+	siteDir := filepath.Join(tempDir, "site")
+
+	assert.NilError(t, os.MkdirAll(filepath.Join(vaultDir, "attachments"), defaultDirMode))
+	assert.NilError(t, os.MkdirAll(siteDir, defaultDirMode))
+
+	sourceBody := "# Source\n\n![[attachments/Screenshot 2026-04-21 at 16.20.24.png]]\n\n#blog/3 #y/2026/4/21"
+	assert.NilError(t, os.WriteFile(filepath.Join(vaultDir, "Source.md"), []byte(sourceBody), defaultFileMode))
+	assert.NilError(t, os.WriteFile(filepath.Join(vaultDir, "attachments", "Screenshot 2026-04-21 at 16.20.24.png"), []byte("png fixture"), defaultFileMode))
+
+	err := Run(context.Background(), Config{
+		ContentDir: testContentDir,
+		HugoDir:    siteDir,
+		Tag:        testTag,
+		TagLine:    -1,
+		TimeFormat: time.RFC3339,
+		VaultDir:   vaultDir,
+	})
+	assert.NilError(t, err)
+
+	indexData, err := os.ReadFile(filepath.Join(siteDir, testContentDir, "source", indexFileName))
+	assert.NilError(t, err)
+	assert.Assert(t, strings.Contains(string(indexData), "![Screenshot 2026-04-21 at 16.20.24.png](Screenshot%202026-04-21%20at%2016.20.24.png)"))
+}
+
+func TestRewriteMarkdownTargetFailsOnAmbiguousVaultWideNoteTarget(t *testing.T) {
+	t.Parallel()
+
+	exporter := newScannedExporter(t, map[string]string{
+		"src/Source.md": "# Source\n\nBody\n\n#blog/3 #y/2026/4/21",
+		"one/Same.md":   "# Same\n\nBody\n\n#blog/3 #y/2026/4/21",
+		"two/Same.md":   "# Same\n\nBody\n\n#blog/3 #y/2026/4/21",
+	})
+
+	source := exporter.noteByRelNoExt["src/source"]
+	_, err := exporter.rewriteMarkdownTarget(source, false, "", "Same.md", map[string]attachmentCopy{})
+	assert.ErrorContains(t, err, `ambiguous note target "Same.md"`)
+	assert.ErrorContains(t, err, "one/Same.md")
+	assert.ErrorContains(t, err, "two/Same.md")
+}
+
+func TestRewriteMarkdownTargetFailsOnAmbiguousVaultWideAttachmentTarget(t *testing.T) {
+	t.Parallel()
+
+	exporter := newScannedExporter(t, map[string]string{
+		"src/Source.md": "# Source\n\nBody\n\n#blog/3 #y/2026/4/21",
+		"one/photo.png": "one",
+		"two/photo.png": "two",
+	})
+
+	source := exporter.noteByRelNoExt["src/source"]
+	_, err := exporter.rewriteMarkdownTarget(source, true, "", "photo.png", map[string]attachmentCopy{})
+	assert.ErrorContains(t, err, `ambiguous attachment target "photo.png"`)
+	assert.ErrorContains(t, err, "one/photo.png")
+	assert.ErrorContains(t, err, "two/photo.png")
 }
 
 func TestRunMatchesGolden(t *testing.T) {
@@ -518,9 +633,9 @@ func TestRunMatchesGolden(t *testing.T) {
 
 	err := Run(context.Background(), Config{
 		Categories: true,
-		ContentDir: "content/blog",
+		ContentDir: testContentDir,
 		HugoDir:    siteDir,
-		Tag:        "#blog/3",
+		Tag:        testTag,
 		TagLine:    -1,
 		Tags:       true,
 		TimeFormat: time.RFC3339,
@@ -554,9 +669,9 @@ func TestRunDetectsAttachmentCollision(t *testing.T) {
 
 	err := Run(context.Background(), Config{
 		Categories: true,
-		ContentDir: "content/blog",
+		ContentDir: testContentDir,
 		HugoDir:    siteDir,
-		Tag:        "#blog/3",
+		Tag:        testTag,
 		TagLine:    -1,
 		Tags:       false,
 		TimeFormat: time.RFC3339,
@@ -582,21 +697,45 @@ func TestRunSkipsShortMarkdownFiles(t *testing.T) {
 	assert.NilError(t, os.WriteFile(filepath.Join(vaultDir, "empty.md"), []byte(""), defaultFileMode))
 
 	err := Run(context.Background(), Config{
-		ContentDir: "content/blog",
+		ContentDir: testContentDir,
 		HugoDir:    siteDir,
-		Tag:        "#blog/3",
+		Tag:        testTag,
 		TagLine:    -1,
 		TimeFormat: time.RFC3339,
 		VaultDir:   vaultDir,
 	})
 	assert.NilError(t, err)
 
-	_, err = os.Stat(filepath.Join(siteDir, "content/blog", "valid", "index.md"))
+	_, err = os.Stat(filepath.Join(siteDir, testContentDir, "valid", "index.md"))
 	assert.NilError(t, err)
-	_, err = os.Stat(filepath.Join(siteDir, "content/blog", "short"))
+	_, err = os.Stat(filepath.Join(siteDir, testContentDir, "short"))
 	assert.Assert(t, os.IsNotExist(err))
-	_, err = os.Stat(filepath.Join(siteDir, "content/blog", "empty"))
+	_, err = os.Stat(filepath.Join(siteDir, testContentDir, "empty"))
 	assert.Assert(t, os.IsNotExist(err))
+}
+
+func newScannedExporter(t *testing.T, files map[string]string) *Exporter {
+	t.Helper()
+
+	tempDir := t.TempDir()
+	for relativePath, contents := range files {
+		fullPath := filepath.Join(tempDir, relativePath)
+		assert.NilError(t, os.MkdirAll(filepath.Dir(fullPath), defaultDirMode))
+		assert.NilError(t, os.WriteFile(fullPath, []byte(contents), defaultFileMode))
+	}
+
+	exporter, err := New(Config{
+		ContentDir: testContentDir,
+		HugoDir:    tempDir,
+		Tag:        testTag,
+		TagLine:    -1,
+		TimeFormat: time.RFC3339,
+		VaultDir:   tempDir,
+	})
+	assert.NilError(t, err)
+	assert.NilError(t, exporter.scan(context.Background()))
+
+	return exporter
 }
 
 func copyDir(srcDir, dstDir string) error {

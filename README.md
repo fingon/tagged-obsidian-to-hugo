@@ -38,8 +38,8 @@ If a note front matter contains `created` or `date created`, the exporter uses i
 - Wiki embeds: `![[image.png]]`
 - Markdown links and images to local files
 
-Links to exported notes become relative Hugo markdown links such as `../other-note/`. Links to notes that are not exported are rewritten to plain text. Wiki links with headings or block references are downgraded to plain text in this version.
+Local links resolve relative to the source note first. If that misses, the exporter falls back to searching the whole vault by note name or attachment basename. Links to exported notes become relative Hugo markdown links such as `../other-note/`. Links to notes that are not exported are rewritten to plain text. Wiki links with headings or block references are downgraded to plain text in this version. If vault-wide fallback matches multiple notes or attachments, the export fails with an explicit error instead of guessing.
 
 ## Attachments
 
-Referenced local attachments are copied into the note bundle and rewritten to bundle-local paths. If two different source attachments would produce the same destination filename in a single bundle, the export fails with an explicit error.
+Referenced local attachments are copied into the note bundle and rewritten to bundle-local paths. This also applies when the source link misses locally but resolves elsewhere in the vault. If two different source attachments would produce the same destination filename in a single bundle, or if vault-wide fallback matches multiple attachments, the export fails with an explicit error.
