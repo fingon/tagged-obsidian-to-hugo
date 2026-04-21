@@ -30,7 +30,7 @@ Flags:
 
 ## Dates
 
-If a note front matter contains `created` or `date created`, the exporter uses it for Hugo `date`. If it contains `last modified` or `date modified`, the exporter emits Hugo `lastmod`. Otherwise, `date` falls back to the note file modification time.
+If a note front matter contains `created` or `date created`, the exporter uses it for Hugo `date`. If it contains `last modified` or `date modified`, the exporter emits Hugo `lastmod`. Otherwise, `date` falls back to the note file modification time. Front matter timestamps may use either RFC3339 offsets like `2026-04-21T08:45:43+03:00` or basic numeric offsets like `2026-04-21T08:45:43+0300`.
 
 ## Supported link forms
 

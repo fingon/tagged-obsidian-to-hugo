@@ -37,6 +37,10 @@ var (
 	markdownLinkPattern         = regexp.MustCompile(`(!?)\[([^\]]*)\]\(([^)]+)\)`)
 	createdFrontMatterKeys      = []string{"created", "date created"}
 	lastModifiedFrontMatterKeys = []string{"last modified", "date modified"}
+	supportedFrontMatterLayouts = []string{
+		time.RFC3339,
+		"2006-01-02T15:04:05-0700",
+	}
 )
 
 type Config struct {
@@ -654,12 +658,14 @@ func parseFrontMatterTime(value any) (time.Time, error) {
 	case time.Time:
 		return typedValue, nil
 	case string:
-		parsedTime, err := time.Parse(time.RFC3339, typedValue)
-		if err != nil {
-			return time.Time{}, fmt.Errorf("parse %q as RFC3339: %w", typedValue, err)
+		for _, layout := range supportedFrontMatterLayouts {
+			parsedTime, err := time.Parse(layout, typedValue)
+			if err == nil {
+				return parsedTime, nil
+			}
 		}
 
-		return parsedTime, nil
+		return time.Time{}, fmt.Errorf("parse %q as one of %q", typedValue, supportedFrontMatterLayouts)
 	default:
 		return time.Time{}, fmt.Errorf("unsupported timestamp value %T", value)
 	}

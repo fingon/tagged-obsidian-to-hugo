@@ -149,6 +149,76 @@ Body
 	assert.Equal(t, *note.LastModified, time.Date(2026, 4, 21, 8, 30, 0, 0, time.UTC))
 }
 
+func TestParseNoteReadsFrontMatterTimestampsWithoutOffsetColon(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	notePath := filepath.Join(tempDir, "Front Matter Basic Offset.md")
+	noteBody := `---
+date created: 2026-04-20T10:00:00+0300
+date modified: 2026-04-21T11:30:00+0300
+---
+# Front Matter Basic Offset
+
+Body
+
+#blog/3`
+
+	assert.NilError(t, os.WriteFile(notePath, []byte(noteBody), defaultFileMode))
+
+	exporter, err := New(Config{
+		ContentDir: "content/blog",
+		HugoDir:    tempDir,
+		Tag:        "#blog/3",
+		TagLine:    -1,
+		TimeFormat: time.RFC3339,
+		VaultDir:   tempDir,
+	})
+	assert.NilError(t, err)
+
+	note, shouldSkip, err := exporter.parseNote(notePath, "Front Matter Basic Offset.md")
+	assert.NilError(t, err)
+	assert.Assert(t, !shouldSkip)
+	assert.Equal(t, note.Date, time.Date(2026, 4, 20, 7, 0, 0, 0, time.UTC))
+	assert.Assert(t, note.LastModified != nil)
+	assert.Equal(t, *note.LastModified, time.Date(2026, 4, 21, 8, 30, 0, 0, time.UTC))
+}
+
+func TestParseNoteReadsFrontMatterAliasesWithoutOffsetColon(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	notePath := filepath.Join(tempDir, "Aliases Basic Offset.md")
+	noteBody := `---
+created: 2026-04-20T10:00:00+0300
+last modified: 2026-04-21T11:30:00+0300
+---
+# Aliases Basic Offset
+
+Body
+
+#blog/3`
+
+	assert.NilError(t, os.WriteFile(notePath, []byte(noteBody), defaultFileMode))
+
+	exporter, err := New(Config{
+		ContentDir: "content/blog",
+		HugoDir:    tempDir,
+		Tag:        "#blog/3",
+		TagLine:    -1,
+		TimeFormat: time.RFC3339,
+		VaultDir:   tempDir,
+	})
+	assert.NilError(t, err)
+
+	note, shouldSkip, err := exporter.parseNote(notePath, "Aliases Basic Offset.md")
+	assert.NilError(t, err)
+	assert.Assert(t, !shouldSkip)
+	assert.Equal(t, note.Date, time.Date(2026, 4, 20, 7, 0, 0, 0, time.UTC))
+	assert.Assert(t, note.LastModified != nil)
+	assert.Equal(t, *note.LastModified, time.Date(2026, 4, 21, 8, 30, 0, 0, time.UTC))
+}
+
 func TestParseNoteRejectsInvalidFrontMatterTimestamp(t *testing.T) {
 	t.Parallel()
 
@@ -178,6 +248,7 @@ Body
 	_, shouldSkip, err := exporter.parseNote(notePath, "Broken.md")
 	assert.Assert(t, !shouldSkip)
 	assert.ErrorContains(t, err, "parse created timestamp")
+	assert.ErrorContains(t, err, "one of")
 }
 
 func TestParseNoteSkipsShortMarkdown(t *testing.T) {
