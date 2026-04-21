@@ -281,6 +281,9 @@ func (e *Exporter) parseNote(path, relativePath string) (*Note, bool, string, er
 	}
 	if dateFound {
 		date = date.UTC()
+		if fallbackFound && fallbackTime.Before(date) {
+			date = fallbackTime
+		}
 	} else if fallbackFound {
 		date = fallbackTime
 	}

@@ -321,6 +321,42 @@ Body
 	}
 }
 
+func TestParseNotePrefersOlderTagDateOverCreatedFrontMatter(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	notePath := filepath.Join(tempDir, "Older Tag Date.md")
+	noteBody := `---
+created: 2026-04-21T10:00:00+03:00
+last modified: 2026-04-22T11:30:00+03:00
+---
+# Older Tag Date
+
+Body
+
+#blog/3 #y/2026/4/20`
+
+	assert.NilError(t, os.WriteFile(notePath, []byte(noteBody), defaultFileMode))
+
+	exporter, err := New(Config{
+		ContentDir: "content/blog",
+		HugoDir:    tempDir,
+		Tag:        "#blog/3",
+		TagLine:    -1,
+		TimeFormat: time.RFC3339,
+		VaultDir:   tempDir,
+	})
+	assert.NilError(t, err)
+
+	note, shouldSkip, skipReason, err := exporter.parseNote(notePath, "Older Tag Date.md")
+	assert.NilError(t, err)
+	assert.Assert(t, !shouldSkip)
+	assert.Equal(t, skipReason, "")
+	assert.Equal(t, note.Date, time.Date(2026, 4, 20, 12, 0, 0, 0, time.UTC))
+	assert.Assert(t, note.LastModified != nil)
+	assert.Equal(t, *note.LastModified, time.Date(2026, 4, 22, 8, 30, 0, 0, time.UTC))
+}
+
 func TestParseNoteSkipsExportWithoutUsableDateMetadata(t *testing.T) {
 	t.Parallel()
 
