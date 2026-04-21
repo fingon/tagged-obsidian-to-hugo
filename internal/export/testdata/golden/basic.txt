@@ -1,0 +1,49 @@
+== content/blog/draft-post/index.md ==
+---
+title: "Draft Post"
+date: 2026-04-21T12:00:00Z
+categories: ["Draft"]
+tags: ["Draft"]
+draft: true
+---
+
+Anchor Second Post becomes text.
+
+
+== content/blog/post-one/index.md ==
+---
+title: "Post One"
+date: 2026-04-20T07:00:00Z
+lastmod: 2026-04-21T08:30:00Z
+categories: ["Feature"]
+tags: ["Feature"]
+draft: false
+---
+
+See [Second Post](../second-post/) and [Draft Post](../draft-post/) plus Missing Note.
+
+Alias link: [Read more](../second-post/).
+
+Markdown note link: [From markdown](../second-post/)
+
+Embed image: ![photo.png](photo.png)
+
+Download: [Spec](spec.txt)
+
+
+== content/blog/post-one/photo.png ==
+png fixture
+
+== content/blog/post-one/spec.txt ==
+spec fixture
+
+== content/blog/second-post/index.md ==
+---
+title: "Second Post"
+date: 2026-04-21T12:00:00Z
+categories: []
+tags: []
+draft: false
+---
+
+Back to [Post One](../post-one/).
