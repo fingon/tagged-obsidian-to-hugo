@@ -2,6 +2,7 @@
 ---
 title: "Draft Post"
 date: 2026-04-21T12:00:00Z
+lastmod: 2026-04-21T12:00:00Z
 categories: ["Draft"]
 tags: ["Draft"]
 draft: true
@@ -41,6 +42,7 @@ spec fixture
 ---
 title: "Second Post"
 date: 2026-04-21T12:00:00Z
+lastmod: 2026-04-21T12:00:00Z
 categories: []
 tags: []
 draft: false

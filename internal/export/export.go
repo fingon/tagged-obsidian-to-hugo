@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -30,6 +31,9 @@ const (
 	draftSegment    = "draft"
 	markdownExt     = ".md"
 	minNoteLines    = 3
+	dateTagPrefix   = "#y"
+	skipReasonShort = "not enough non-empty lines"
+	skipReasonDate  = "missing date metadata"
 )
 
 var (
@@ -170,12 +174,12 @@ func (e *Exporter) scan(ctx context.Context) error {
 
 		relativePath = filepath.ToSlash(relativePath)
 		if strings.EqualFold(filepath.Ext(path), markdownExt) {
-			note, shouldSkip, err := e.parseNote(path, relativePath)
+			note, shouldSkip, skipReason, err := e.parseNote(path, relativePath)
 			if err != nil {
 				return err
 			}
 			if shouldSkip {
-				slog.Info("skipped markdown", "path", relativePath, "reason", "not enough non-empty lines")
+				slog.Info("skipped markdown", "path", relativePath, "reason", skipReason)
 				return nil
 			}
 
@@ -231,29 +235,24 @@ func (e *Exporter) writeNote(ctx context.Context, note *Note) error {
 	return nil
 }
 
-func (e *Exporter) parseNote(path, relativePath string) (*Note, bool, error) {
+func (e *Exporter) parseNote(path, relativePath string) (*Note, bool, string, error) {
 	bodyRaw, err := os.ReadFile(path)
 	if err != nil {
-		return nil, false, fmt.Errorf("read note %s: %w", path, err)
-	}
-
-	info, err := os.Stat(path)
-	if err != nil {
-		return nil, false, fmt.Errorf("stat note %s: %w", path, err)
+		return nil, false, "", fmt.Errorf("read note %s: %w", path, err)
 	}
 
 	bodyLinesWithFrontMatter := bytes.Split(bytes.ReplaceAll(bodyRaw, []byte("\r\n"), []byte("\n")), []byte("\n"))
 	frontMatter, lines, err := parseSourceFrontMatter(relativePath, bodyLinesWithFrontMatter)
 	if err != nil {
-		return nil, false, err
+		return nil, false, "", err
 	}
 
 	if countNonEmptyLines(lines) < minNoteLines {
-		return nil, true, nil
+		return nil, true, skipReasonShort, nil
 	}
 
 	if len(lines) == 0 || len(bytes.TrimSpace(lines[0])) == 0 {
-		return nil, false, fmt.Errorf("note %s has no title line", relativePath)
+		return nil, false, "", fmt.Errorf("note %s has no title line", relativePath)
 	}
 
 	tagLineIndex := e.resolveTagLineIndex(lines)
@@ -275,19 +274,32 @@ func (e *Exporter) parseNote(path, relativePath string) (*Note, bool, error) {
 
 	title := parseTitle(string(lines[0]))
 	slug := slugify(title)
-	date := info.ModTime().UTC()
-	if createdTime, found, timestampErr := sourceTimestamp(frontMatter, createdFrontMatterKeys); timestampErr != nil {
-		return nil, false, fmt.Errorf("parse created timestamp for %s: %w", relativePath, timestampErr)
-	} else if found {
-		date = createdTime.UTC()
+	fallbackTime, fallbackFound := tagDate(parsedTags)
+	date, dateFound, timestampErr := sourceTimestamp(frontMatter, createdFrontMatterKeys)
+	if timestampErr != nil {
+		return nil, false, "", fmt.Errorf("parse created timestamp for %s: %w", relativePath, timestampErr)
+	}
+	if dateFound {
+		date = date.UTC()
+	} else if fallbackFound {
+		date = fallbackTime
 	}
 
 	var lastModified *time.Time
-	if modifiedTime, found, timestampErr := sourceTimestamp(frontMatter, lastModifiedFrontMatterKeys); timestampErr != nil {
-		return nil, false, fmt.Errorf("parse modified timestamp for %s: %w", relativePath, timestampErr)
-	} else if found {
+	modifiedTime, modifiedFound, timestampErr := sourceTimestamp(frontMatter, lastModifiedFrontMatterKeys)
+	if timestampErr != nil {
+		return nil, false, "", fmt.Errorf("parse modified timestamp for %s: %w", relativePath, timestampErr)
+	}
+	if modifiedFound {
 		modifiedTimeUTC := modifiedTime.UTC()
 		lastModified = &modifiedTimeUTC
+	} else if fallbackFound {
+		fallbackTimeCopy := fallbackTime
+		lastModified = &fallbackTimeCopy
+	}
+
+	if exportNote && (date.IsZero() || lastModified == nil) {
+		return nil, true, skipReasonDate, nil
 	}
 
 	note := &Note{
@@ -306,7 +318,7 @@ func (e *Exporter) parseNote(path, relativePath string) (*Note, bool, error) {
 	}
 
 	slog.Debug("parsed note", "path", relativePath, "export", exportNote, "tags", parsedTags)
-	return note, false, nil
+	return note, false, "", nil
 }
 
 func countNonEmptyLines(lines [][]byte) int {
@@ -651,6 +663,46 @@ func sourceTimestamp(frontMatter map[string]any, keys []string) (time.Time, bool
 	}
 
 	return time.Time{}, false, nil
+}
+
+func tagDate(tags []string) (time.Time, bool) {
+	for _, tag := range tags {
+		parts := strings.Split(strings.TrimPrefix(strings.TrimSuffix(tag, "#"), "#"), "/")
+		if len(parts) != 4 || !strings.EqualFold(parts[0], strings.TrimPrefix(dateTagPrefix, "#")) {
+			continue
+		}
+
+		year, err := parseDateTagPart(parts[1])
+		if err != nil {
+			continue
+		}
+		month, err := parseDateTagPart(parts[2])
+		if err != nil {
+			continue
+		}
+		day, err := parseDateTagPart(parts[3])
+		if err != nil {
+			continue
+		}
+
+		tagTime := time.Date(year, time.Month(month), day, 12, 0, 0, 0, time.UTC)
+		if tagTime.Year() != year || int(tagTime.Month()) != month || tagTime.Day() != day {
+			continue
+		}
+
+		return tagTime, true
+	}
+
+	return time.Time{}, false
+}
+
+func parseDateTagPart(value string) (int, error) {
+	parsedValue, err := strconv.Atoi(value)
+	if err != nil {
+		return 0, err
+	}
+
+	return parsedValue, nil
 }
 
 func parseFrontMatterTime(value any) (time.Time, error) {

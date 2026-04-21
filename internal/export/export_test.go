@@ -42,16 +42,14 @@ func TestMatchingTags(t *testing.T) {
 	assert.DeepEqual(t, matchingTags(tags, "#blog/3"), []string{"#blog/3", "#blog/3/child"})
 }
 
-func TestParseNoteUsesFileMtimeWhenFrontMatterMissing(t *testing.T) {
+func TestParseNoteUsesTagDateWhenFrontMatterMissing(t *testing.T) {
 	t.Parallel()
 
 	tempDir := t.TempDir()
 	notePath := filepath.Join(tempDir, "Note.md")
-	modifiedTime := time.Date(2026, 4, 21, 12, 0, 0, 0, time.UTC)
-	noteBody := "# Note\n\nBody\n\n#blog/3"
+	noteBody := "# Note\n\nBody\n\n#blog/3 #y/2026/4/21"
 
 	assert.NilError(t, os.WriteFile(notePath, []byte(noteBody), defaultFileMode))
-	assert.NilError(t, os.Chtimes(notePath, modifiedTime, modifiedTime))
 
 	exporter, err := New(Config{
 		ContentDir: "content/blog",
@@ -63,14 +61,16 @@ func TestParseNoteUsesFileMtimeWhenFrontMatterMissing(t *testing.T) {
 	})
 	assert.NilError(t, err)
 
-	note, shouldSkip, err := exporter.parseNote(notePath, "Note.md")
+	note, shouldSkip, skipReason, err := exporter.parseNote(notePath, "Note.md")
 	assert.NilError(t, err)
 	assert.Assert(t, !shouldSkip)
-	assert.Equal(t, note.Date, modifiedTime)
-	assert.Assert(t, note.LastModified == nil)
+	assert.Equal(t, skipReason, "")
+	assert.Equal(t, note.Date, time.Date(2026, 4, 21, 12, 0, 0, 0, time.UTC))
+	assert.Assert(t, note.LastModified != nil)
+	assert.Equal(t, *note.LastModified, time.Date(2026, 4, 21, 12, 0, 0, 0, time.UTC))
 	assert.Equal(t, note.Title, "Note")
 	assert.Assert(t, strings.Contains(note.Body, "Body"))
-	assert.Assert(t, !strings.Contains(note.Body, "#blog/3"))
+	assert.Assert(t, !strings.Contains(note.Body, "#blog/3 #y/2026/4/21"))
 }
 
 func TestParseNoteReadsFrontMatterTimestamps(t *testing.T) {
@@ -78,7 +78,6 @@ func TestParseNoteReadsFrontMatterTimestamps(t *testing.T) {
 
 	tempDir := t.TempDir()
 	notePath := filepath.Join(tempDir, "Front Matter.md")
-	modifiedTime := time.Date(2026, 4, 21, 12, 0, 0, 0, time.UTC)
 	noteBody := `---
 date created: 2026-04-20T10:00:00+03:00
 date modified: 2026-04-21T11:30:00+03:00
@@ -90,7 +89,6 @@ Body
 #blog/3`
 
 	assert.NilError(t, os.WriteFile(notePath, []byte(noteBody), defaultFileMode))
-	assert.NilError(t, os.Chtimes(notePath, modifiedTime, modifiedTime))
 
 	exporter, err := New(Config{
 		ContentDir: "content/blog",
@@ -102,9 +100,10 @@ Body
 	})
 	assert.NilError(t, err)
 
-	note, shouldSkip, err := exporter.parseNote(notePath, "Front Matter.md")
+	note, shouldSkip, skipReason, err := exporter.parseNote(notePath, "Front Matter.md")
 	assert.NilError(t, err)
 	assert.Assert(t, !shouldSkip)
+	assert.Equal(t, skipReason, "")
 	assert.Equal(t, note.Date, time.Date(2026, 4, 20, 7, 0, 0, 0, time.UTC))
 	assert.Assert(t, note.LastModified != nil)
 	assert.Equal(t, *note.LastModified, time.Date(2026, 4, 21, 8, 30, 0, 0, time.UTC))
@@ -141,9 +140,10 @@ Body
 	})
 	assert.NilError(t, err)
 
-	note, shouldSkip, err := exporter.parseNote(notePath, "Aliases.md")
+	note, shouldSkip, skipReason, err := exporter.parseNote(notePath, "Aliases.md")
 	assert.NilError(t, err)
 	assert.Assert(t, !shouldSkip)
+	assert.Equal(t, skipReason, "")
 	assert.Equal(t, note.Date, time.Date(2026, 4, 20, 7, 0, 0, 0, time.UTC))
 	assert.Assert(t, note.LastModified != nil)
 	assert.Equal(t, *note.LastModified, time.Date(2026, 4, 21, 8, 30, 0, 0, time.UTC))
@@ -176,9 +176,10 @@ Body
 	})
 	assert.NilError(t, err)
 
-	note, shouldSkip, err := exporter.parseNote(notePath, "Front Matter Basic Offset.md")
+	note, shouldSkip, skipReason, err := exporter.parseNote(notePath, "Front Matter Basic Offset.md")
 	assert.NilError(t, err)
 	assert.Assert(t, !shouldSkip)
+	assert.Equal(t, skipReason, "")
 	assert.Equal(t, note.Date, time.Date(2026, 4, 20, 7, 0, 0, 0, time.UTC))
 	assert.Assert(t, note.LastModified != nil)
 	assert.Equal(t, *note.LastModified, time.Date(2026, 4, 21, 8, 30, 0, 0, time.UTC))
@@ -211,9 +212,10 @@ Body
 	})
 	assert.NilError(t, err)
 
-	note, shouldSkip, err := exporter.parseNote(notePath, "Aliases Basic Offset.md")
+	note, shouldSkip, skipReason, err := exporter.parseNote(notePath, "Aliases Basic Offset.md")
 	assert.NilError(t, err)
 	assert.Assert(t, !shouldSkip)
+	assert.Equal(t, skipReason, "")
 	assert.Equal(t, note.Date, time.Date(2026, 4, 20, 7, 0, 0, 0, time.UTC))
 	assert.Assert(t, note.LastModified != nil)
 	assert.Equal(t, *note.LastModified, time.Date(2026, 4, 21, 8, 30, 0, 0, time.UTC))
@@ -245,10 +247,151 @@ Body
 	})
 	assert.NilError(t, err)
 
-	_, shouldSkip, err := exporter.parseNote(notePath, "Broken.md")
+	_, shouldSkip, skipReason, err := exporter.parseNote(notePath, "Broken.md")
 	assert.Assert(t, !shouldSkip)
+	assert.Equal(t, skipReason, "")
 	assert.ErrorContains(t, err, "parse created timestamp")
 	assert.ErrorContains(t, err, "one of")
+}
+
+func TestParseNoteFillsMissingTimestampFieldsFromTagDate(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name             string
+		body             string
+		wantDate         time.Time
+		wantLastModified time.Time
+	}{
+		{
+			name: "fills missing created",
+			body: `---
+last modified: 2026-04-21T11:30:00+03:00
+---
+# Missing Created
+
+Body
+
+#blog/3 #y/2026/4/20`,
+			wantDate:         time.Date(2026, 4, 20, 12, 0, 0, 0, time.UTC),
+			wantLastModified: time.Date(2026, 4, 21, 8, 30, 0, 0, time.UTC),
+		},
+		{
+			name: "fills missing modified",
+			body: `---
+created: 2026-04-20T10:00:00+03:00
+---
+# Missing Modified
+
+Body
+
+#blog/3 #y/2026/4/21`,
+			wantDate:         time.Date(2026, 4, 20, 7, 0, 0, 0, time.UTC),
+			wantLastModified: time.Date(2026, 4, 21, 12, 0, 0, 0, time.UTC),
+		},
+	}
+
+	for _, testCase := range tests {
+		testCase := testCase
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			tempDir := t.TempDir()
+			notePath := filepath.Join(tempDir, "Note.md")
+			assert.NilError(t, os.WriteFile(notePath, []byte(testCase.body), defaultFileMode))
+
+			exporter, err := New(Config{
+				ContentDir: "content/blog",
+				HugoDir:    tempDir,
+				Tag:        "#blog/3",
+				TagLine:    -1,
+				TimeFormat: time.RFC3339,
+				VaultDir:   tempDir,
+			})
+			assert.NilError(t, err)
+
+			note, shouldSkip, skipReason, err := exporter.parseNote(notePath, "Note.md")
+			assert.NilError(t, err)
+			assert.Assert(t, !shouldSkip)
+			assert.Equal(t, skipReason, "")
+			assert.Equal(t, note.Date, testCase.wantDate)
+			assert.Assert(t, note.LastModified != nil)
+			assert.Equal(t, *note.LastModified, testCase.wantLastModified)
+		})
+	}
+}
+
+func TestParseNoteSkipsExportWithoutUsableDateMetadata(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		body string
+	}{
+		{
+			name: "missing front matter and tag date",
+			body: "# Missing Date\n\nBody\n\n#blog/3",
+		},
+		{
+			name: "invalid tag date",
+			body: "# Bad Date\n\nBody\n\n#blog/3 #y/2026/2/30",
+		},
+	}
+
+	for _, testCase := range tests {
+		testCase := testCase
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			tempDir := t.TempDir()
+			notePath := filepath.Join(tempDir, "Note.md")
+			assert.NilError(t, os.WriteFile(notePath, []byte(testCase.body), defaultFileMode))
+
+			exporter, err := New(Config{
+				ContentDir: "content/blog",
+				HugoDir:    tempDir,
+				Tag:        "#blog/3",
+				TagLine:    -1,
+				TimeFormat: time.RFC3339,
+				VaultDir:   tempDir,
+			})
+			assert.NilError(t, err)
+
+			note, shouldSkip, skipReason, err := exporter.parseNote(notePath, "Note.md")
+			assert.NilError(t, err)
+			assert.Assert(t, shouldSkip)
+			assert.Equal(t, skipReason, skipReasonDate)
+			assert.Assert(t, note == nil)
+		})
+	}
+}
+
+func TestParseNoteAllowsNonExportNoteWithoutDateMetadata(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	notePath := filepath.Join(tempDir, "Note.md")
+	noteBody := "# Note\n\nBody\n\n#other"
+	assert.NilError(t, os.WriteFile(notePath, []byte(noteBody), defaultFileMode))
+
+	exporter, err := New(Config{
+		ContentDir: "content/blog",
+		HugoDir:    tempDir,
+		Tag:        "#blog/3",
+		TagLine:    -1,
+		TimeFormat: time.RFC3339,
+		VaultDir:   tempDir,
+	})
+	assert.NilError(t, err)
+
+	note, shouldSkip, skipReason, err := exporter.parseNote(notePath, "Note.md")
+	assert.NilError(t, err)
+	assert.Assert(t, !shouldSkip)
+	assert.Equal(t, skipReason, "")
+	assert.Assert(t, !note.Export)
+	assert.Assert(t, note.Date.IsZero())
+	assert.Assert(t, note.LastModified == nil)
+	assert.Equal(t, note.Title, "Note")
 }
 
 func TestParseNoteSkipsShortMarkdown(t *testing.T) {
@@ -300,9 +443,10 @@ created: 2026-04-20T10:00:00+03:00
 			})
 			assert.NilError(t, err)
 
-			note, shouldSkip, err := exporter.parseNote(notePath, testCase.fileName)
+			note, shouldSkip, skipReason, err := exporter.parseNote(notePath, testCase.fileName)
 			assert.NilError(t, err)
 			assert.Assert(t, shouldSkip)
+			assert.Equal(t, skipReason, skipReasonShort)
 			assert.Assert(t, note == nil)
 		})
 	}
@@ -367,7 +511,7 @@ func TestRunDetectsAttachmentCollision(t *testing.T) {
 	assert.NilError(t, os.MkdirAll(filepath.Join(vaultDir, "two"), defaultDirMode))
 	assert.NilError(t, os.MkdirAll(siteDir, defaultDirMode))
 
-	noteBody := "# Collision\n\n![[one/file.txt]] ![[two/file.txt]]\n\n#blog/3"
+	noteBody := "# Collision\n\n![[one/file.txt]] ![[two/file.txt]]\n\n#blog/3 #y/2026/4/21"
 	assert.NilError(t, os.WriteFile(filepath.Join(vaultDir, "collision.md"), []byte(noteBody), defaultFileMode))
 	assert.NilError(t, os.WriteFile(filepath.Join(vaultDir, "one", "file.txt"), []byte("one"), defaultFileMode))
 	assert.NilError(t, os.WriteFile(filepath.Join(vaultDir, "two", "file.txt"), []byte("two"), defaultFileMode))
@@ -395,7 +539,7 @@ func TestRunSkipsShortMarkdownFiles(t *testing.T) {
 	assert.NilError(t, os.MkdirAll(vaultDir, defaultDirMode))
 	assert.NilError(t, os.MkdirAll(siteDir, defaultDirMode))
 
-	validBody := "# Valid\n\nBody\n\n#blog/3"
+	validBody := "# Valid\n\nBody\n\n#blog/3 #y/2026/4/21"
 	shortBody := "# Short\n\n#blog/3"
 	assert.NilError(t, os.WriteFile(filepath.Join(vaultDir, "valid.md"), []byte(validBody), defaultFileMode))
 	assert.NilError(t, os.WriteFile(filepath.Join(vaultDir, "short.md"), []byte(shortBody), defaultFileMode))
