@@ -435,6 +435,111 @@ func TestParseNoteAllowsNonExportNoteWithoutDateMetadata(t *testing.T) {
 	assert.Equal(t, note.Title, "Note")
 }
 
+func TestParseNoteAllowsNonExportNoteWithoutBlogShape(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		body      string
+		fileName  string
+		wantTitle string
+	}{
+		{
+			name:      "empty",
+			body:      "",
+			fileName:  "Empty.md",
+			wantTitle: "Empty",
+		},
+		{
+			name:      "missing title",
+			body:      "\nBody\n#other",
+			fileName:  "Missing Title.md",
+			wantTitle: "Missing Title",
+		},
+		{
+			name:      "short",
+			body:      "# Short\n\n#other",
+			fileName:  "Short.md",
+			wantTitle: "Short",
+		},
+		{
+			name: "invalid front matter timestamp",
+			body: `---
+date created: nope
+---
+# Invalid Timestamp
+
+Body
+
+#other`,
+			fileName:  "Invalid Timestamp.md",
+			wantTitle: "Invalid Timestamp",
+		},
+		{
+			name: "unterminated front matter",
+			body: `---
+date created: 2026-04-20T10:00:00+03:00
+# Unterminated
+
+#other`,
+			fileName:  "Unterminated.md",
+			wantTitle: "Unterminated",
+		},
+	}
+
+	for _, testCase := range tests {
+		testCase := testCase
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			tempDir := t.TempDir()
+			notePath := filepath.Join(tempDir, testCase.fileName)
+			assert.NilError(t, os.WriteFile(notePath, []byte(testCase.body), defaultFileMode))
+
+			exporter, err := New(Config{
+				ContentDir: "content/blog",
+				HugoDir:    tempDir,
+				Tag:        "#blog/3",
+				TagLine:    -1,
+				TimeFormat: time.RFC3339,
+				VaultDir:   tempDir,
+			})
+			assert.NilError(t, err)
+
+			note, shouldSkip, skipReason, err := exporter.parseNote(notePath, testCase.fileName)
+			assert.NilError(t, err)
+			assert.Assert(t, !shouldSkip)
+			assert.Equal(t, skipReason, "")
+			assert.Assert(t, !note.Export)
+			assert.Equal(t, note.Title, testCase.wantTitle)
+		})
+	}
+}
+
+func TestParseNoteRejectsExportNoteWithoutTitle(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	notePath := filepath.Join(tempDir, "Missing Title.md")
+	noteBody := "\nBody\nMore body\n\n#blog/3 #y/2026/4/21"
+	assert.NilError(t, os.WriteFile(notePath, []byte(noteBody), defaultFileMode))
+
+	exporter, err := New(Config{
+		ContentDir: "content/blog",
+		HugoDir:    tempDir,
+		Tag:        "#blog/3",
+		TagLine:    -1,
+		TimeFormat: time.RFC3339,
+		VaultDir:   tempDir,
+	})
+	assert.NilError(t, err)
+
+	_, shouldSkip, skipReason, err := exporter.parseNote(notePath, "Missing Title.md")
+	assert.Assert(t, !shouldSkip)
+	assert.Equal(t, skipReason, "")
+	assert.ErrorContains(t, err, "has no title line")
+}
+
 func TestParseNoteSkipsShortMarkdown(t *testing.T) {
 	t.Parallel()
 
@@ -443,11 +548,6 @@ func TestParseNoteSkipsShortMarkdown(t *testing.T) {
 		body     string
 		fileName string
 	}{
-		{
-			name:     "empty file",
-			body:     "",
-			fileName: "Empty.md",
-		},
 		{
 			name:     "two non-empty lines",
 			body:     "# Short\n\n#blog/3",
@@ -692,9 +792,15 @@ func TestRunSkipsShortMarkdownFiles(t *testing.T) {
 
 	validBody := "# Valid\n\nBody\n\n#blog/3 #y/2026/4/21"
 	shortBody := "# Short\n\n#blog/3"
+	invalidNonBlogBody := `---
+date created: nope
+# Invalid Non Blog
+
+#other`
 	assert.NilError(t, os.WriteFile(filepath.Join(vaultDir, "valid.md"), []byte(validBody), defaultFileMode))
 	assert.NilError(t, os.WriteFile(filepath.Join(vaultDir, "short.md"), []byte(shortBody), defaultFileMode))
 	assert.NilError(t, os.WriteFile(filepath.Join(vaultDir, "empty.md"), []byte(""), defaultFileMode))
+	assert.NilError(t, os.WriteFile(filepath.Join(vaultDir, "invalid-non-blog.md"), []byte(invalidNonBlogBody), defaultFileMode))
 
 	err := Run(context.Background(), Config{
 		ContentDir: testContentDir,
@@ -711,6 +817,8 @@ func TestRunSkipsShortMarkdownFiles(t *testing.T) {
 	_, err = os.Stat(filepath.Join(siteDir, testContentDir, "short"))
 	assert.Assert(t, os.IsNotExist(err))
 	_, err = os.Stat(filepath.Join(siteDir, testContentDir, "empty"))
+	assert.Assert(t, os.IsNotExist(err))
+	_, err = os.Stat(filepath.Join(siteDir, testContentDir, "invalid-non-blog"))
 	assert.Assert(t, os.IsNotExist(err))
 }
 

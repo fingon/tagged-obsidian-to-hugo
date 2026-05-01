@@ -34,6 +34,7 @@ const (
 	dateTagPrefix   = "#y"
 	skipReasonShort = "not enough non-empty lines"
 	skipReasonDate  = "missing date metadata"
+	untitledTitle   = "untitled"
 )
 
 var (
@@ -242,6 +243,28 @@ func (e *Exporter) parseNote(path, relativePath string) (*Note, bool, string, er
 	}
 
 	bodyLinesWithFrontMatter := bytes.Split(bytes.ReplaceAll(bodyRaw, []byte("\r\n"), []byte("\n")), []byte("\n"))
+	tagScanLines := sourceLinesForTagScan(bodyLinesWithFrontMatter)
+	tagLineIndex := e.resolveTagLineIndex(tagScanLines)
+	if tagLineIndex < 0 {
+		tagLineIndex = len(tagScanLines)
+	}
+
+	parsedTags := scanTags(linesAt(tagScanLines, tagLineIndex))
+	exportedTags := matchingTags(parsedTags, e.cfg.Tag)
+	exportNote := len(exportedTags) > 0
+	if !exportNote {
+		title := fallbackNoteTitle(tagScanLines, relativePath)
+		return &Note{
+			AbsolutePath: path,
+			BodyRaw:      bodyRaw,
+			Export:       false,
+			RelativePath: relativePath,
+			Slug:         slugify(title),
+			TagLineIndex: tagLineIndex,
+			Title:        title,
+		}, false, "", nil
+	}
+
 	frontMatter, lines, err := parseSourceFrontMatter(relativePath, bodyLinesWithFrontMatter)
 	if err != nil {
 		return nil, false, "", err
@@ -254,15 +277,6 @@ func (e *Exporter) parseNote(path, relativePath string) (*Note, bool, string, er
 	if len(lines) == 0 || len(bytes.TrimSpace(lines[0])) == 0 {
 		return nil, false, "", fmt.Errorf("note %s has no title line", relativePath)
 	}
-
-	tagLineIndex := e.resolveTagLineIndex(lines)
-	if tagLineIndex < 0 {
-		tagLineIndex = len(lines)
-	}
-
-	parsedTags := scanTags(linesAt(lines, tagLineIndex))
-	exportedTags := matchingTags(parsedTags, e.cfg.Tag)
-	exportNote := len(exportedTags) > 0
 
 	bodyLines := slices.Clone(lines)
 	if tagLineIndex >= 0 && tagLineIndex < len(bodyLines) {
@@ -322,6 +336,36 @@ func (e *Exporter) parseNote(path, relativePath string) (*Note, bool, string, er
 
 	slog.Debug("parsed note", "path", relativePath, "export", exportNote, "tags", parsedTags)
 	return note, false, "", nil
+}
+
+func sourceLinesForTagScan(lines [][]byte) [][]byte {
+	if len(lines) == 0 || string(lines[0]) != frontMatterSep {
+		return lines
+	}
+
+	for index := 1; index < len(lines); index++ {
+		if string(lines[index]) == frontMatterSep {
+			return lines[index+1:]
+		}
+	}
+
+	return lines
+}
+
+func fallbackNoteTitle(lines [][]byte, relativePath string) string {
+	if len(lines) > 0 && len(bytes.TrimSpace(lines[0])) > 0 && string(lines[0]) != frontMatterSep {
+		title := parseTitle(string(lines[0]))
+		if title != untitledTitle {
+			return title
+		}
+	}
+
+	fileName := strings.TrimSuffix(filepath.Base(relativePath), filepath.Ext(relativePath))
+	if fileName == "" {
+		return untitledTitle
+	}
+
+	return fileName
 }
 
 func countNonEmptyLines(lines [][]byte) int {
@@ -909,7 +953,7 @@ func parseTitle(line string) string {
 	trimmed = strings.TrimPrefix(trimmed, "#")
 	trimmed = strings.TrimSpace(trimmed)
 	if trimmed == "" {
-		return "untitled"
+		return untitledTitle
 	}
 
 	return trimmed
