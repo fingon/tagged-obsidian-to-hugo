@@ -345,8 +345,16 @@ func sourceLinesForTagScan(lines [][]byte) [][]byte {
 
 	for index := 1; index < len(lines); index++ {
 		if string(lines[index]) == frontMatterSep {
-			return lines[index+1:]
+			return trimLeadingBlankLines(lines[index+1:])
 		}
+	}
+
+	return lines
+}
+
+func trimLeadingBlankLines(lines [][]byte) [][]byte {
+	for len(lines) > 0 && len(bytes.TrimSpace(lines[0])) == 0 {
+		lines = lines[1:]
 	}
 
 	return lines
@@ -768,7 +776,7 @@ func parseSourceFrontMatter(relativePath string, lines [][]byte) (map[string]any
 
 	frontMatterLines := bytes.Join(lines[1:endIndex], []byte("\n"))
 	if len(bytes.TrimSpace(frontMatterLines)) == 0 {
-		return map[string]any{}, lines[endIndex+1:], nil
+		return map[string]any{}, trimLeadingBlankLines(lines[endIndex+1:]), nil
 	}
 
 	frontMatter := map[string]any{}
@@ -776,7 +784,7 @@ func parseSourceFrontMatter(relativePath string, lines [][]byte) (map[string]any
 		return nil, nil, fmt.Errorf("parse front matter for %s: %w", relativePath, err)
 	}
 
-	return frontMatter, lines[endIndex+1:], nil
+	return frontMatter, trimLeadingBlankLines(lines[endIndex+1:]), nil
 }
 
 func sourceTimestamp(frontMatter map[string]any, keys []string) (time.Time, bool, error) {

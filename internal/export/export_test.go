@@ -87,6 +87,7 @@ func TestParseNoteReadsFrontMatterTimestamps(t *testing.T) {
 date created: 2026-04-20T10:00:00+03:00
 date modified: 2026-04-21T11:30:00+03:00
 ---
+
 # Front Matter
 
 Body
